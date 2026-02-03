@@ -14,10 +14,14 @@ class Application extends Model
         'phone',
         'college',
         'degree',
+        // ADD THESE:
+        'last_exam_appeared',
+        'cgpa',
         'domain',
         'skills',
         'resume_path',
         'status',
+        'interview_batch_id',
         
     ];
 
@@ -32,5 +36,11 @@ class Application extends Model
             self::STATUS_INTERVIEW => 'Interview',
             self::STATUS_SELECTED  => 'Selected',
         ];
+    }
+    
+    // Add 'interview_batch_id' to your $fillable array
+    public function interviewBatch()
+    {
+        return $this->belongsTo(InterviewBatch::class);
     }
 }

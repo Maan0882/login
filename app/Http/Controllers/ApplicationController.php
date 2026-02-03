@@ -21,6 +21,9 @@ class ApplicationController extends Controller
                 'phone'   => 'required|string',
                 'college' => 'nullable|string',
                 'degree'  => 'required|string',
+                // ADD THESE LINES:
+                'last_exam_appeared' => 'required|string|max:255',
+                'cgpa' => 'required|numeric|between:0,100', // Validates number between 0 and 100
                 'domain'  => 'required|string',
                 'skills'  => 'required|string',
                 'resume_path'  => 'nullable|file|mimes:pdf|max:10240',
@@ -48,6 +51,9 @@ class ApplicationController extends Controller
             'phone'       => $validated['phone'],
             'college'     => $validated['college'] ?? null,
             'degree'      => $validated['degree'],
+            // ADD THESE LINES:
+            'last_exam_appeared' => $request->last_exam_appeared,
+            'cgpa' => $request->cgpa,
             'domain'      => $validated['domain'],
             'skills'      => $validated['skills'],
             'resume_path' => $resumePath,

@@ -5,6 +5,7 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\ApplicationResource\Pages;
 use App\Filament\Resources\ApplicationResource\RelationManagers;
 use App\Models\Application;
+use App\Models\InterviewBatch;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -22,21 +23,21 @@ use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Grid;
 use Filament\Tables\Actions\Action;
 use Filament\Forms\Components\Dropdown;
-
+//use App\Filament\Resources\InterviewBatchResource;
 use Filament\Infolists\Infolist;
 use Filament\Infolists\Components\TextEntry;
 //use Filament\Infolists\Components\Section;
 use Filament\Tables\Actions\ViewAction;
-
 use Filament\Tables\Filters\SelectFilter;
+use App\Mail\InterviewScheduledMail;
+use Illuminate\Support\Facades\Mail;
+use Filament\Tables\Actions\BulkAction;
+use Illuminate\Database\Eloquent\Collection;
+use Carbon\Carbon;
 
 class ApplicationResource extends Resource
 {
     protected static ?string $model = Application::class;
-
-     
-    
-
    
     protected static ?string $navigationIcon = 'heroicon-o-document-text';
 
@@ -71,6 +72,19 @@ class ApplicationResource extends Resource
                         TextInput::make('degree')
                             ->required()
                             ->maxLength(100),
+
+                        // --- ADD THESE TWO FIELDS HERE ---
+                        TextInput::make('last_exam_appeared')
+                            ->label('Last Exam Appeared')
+                            ->placeholder('e.g. HSC, Sem 6')
+                            ->maxLength(255),
+
+                        TextInput::make('cgpa')
+                            ->label('CGPA / Percentage')
+                            ->numeric()       // Ensures only numbers are entered
+                            ->step(0.01)      // Allows decimals like 8.55
+                            ->maxValue(100),  // Optional: prevents unrealistic numbers
+                        // ---------------------------------
 
                         Select::make('domain')
                             ->label('Internship Domain')
@@ -114,15 +128,33 @@ class ApplicationResource extends Resource
     {
         return $table
             ->recordUrl(null)
-            ->poll('10s') // ⬅ auto refresh
+            ->recordClasses(fn ($record) => $record->status === 'interview_scheduled' ? 'bg-green-50 border-l-4 border-green-500' : null)
+            ->poll('5s') // ⬅ auto refresh
             ->defaultSort('created_at', 'desc') // 🔥 newest on top
             ->columns([
                 // To display in table
-                TextColumn::make('name')->searchable(),
+                TextColumn::make('name')
+                    ->searchable()
+                    // 1. Change Font Color to Green ('success') if scheduled
+                    ->color(fn ($record) => $record->status === 'interview_scheduled' ? 'success' : null)
+                    // 2. Add a Checkmark Icon if scheduled
+                    ->icon(fn ($record) => $record->status === 'interview_scheduled' ? 'heroicon-m-check-badge' : null)
+                    // 3. Make the name bold if scheduled
+                    ->weight(fn ($record) => $record->status === 'interview_scheduled' ? 'bold' : 'normal'),
                 TextColumn::make('email')->searchable(),
                 TextColumn::make('phone') ->toggleable(),
                 TextColumn::make('college') ->toggleable(),
                 TextColumn::make('degree') ->toggleable(),
+                // --- ADD THESE TWO COLUMNS HERE ---
+                TextColumn::make('last_exam_appeared')
+                    ->label('Last Exam')
+                    ->toggleable(),
+
+                TextColumn::make('cgpa')
+                    ->label('CGPA')
+                    ->sortable()
+                    ->toggleable(),
+                // ----------------------------------
                 TextColumn::make('domain') ->toggleable(),
                 TextColumn::make('skills')  ->toggleable(isToggledHiddenByDefault: true),
                 // TextColumn::make('resume_path')
@@ -131,14 +163,17 @@ class ApplicationResource extends Resource
                 //     ->url(fn ($record) => asset('storage/' . $record->resume_path))
                 //     ->openUrlInNewTab()
                 //     ->sortable(false),
-
+                // TextColumn::make('title')
+                //     ->label('Interview Batch')
+                //     ->sortable(),
                 TextColumn::make('created_at')->dateTime(),
                 
                 BadgeColumn::make('status')
                 ->colors([
-                    'secondary' => 'applied',
-                    'warning'   => 'interviewed',
-                    'success'   => 'selected',
+                    'primary' => 'applied',
+                    'warning' => 'shortlisted',
+                    'success' => 'interview_scheduled',
+                    'danger' => 'rejected',
                 ])->alignCenter()
    
 
@@ -181,39 +216,120 @@ class ApplicationResource extends Resource
                 
                 ->bulkActions([
                     Tables\Actions\BulkActionGroup::make([
-                    // to delete all records
-                      Tables\Actions\DeleteBulkAction::make(),
+                        Tables\Actions\DeleteBulkAction::make(),
 
-                ])
-            ]);
+                        // --- NEW SMART SCHEDULE ACTION ---
+                        BulkAction::make('schedule_interview')
+                            ->label('Schedule Interview')
+                            ->icon('heroicon-o-calendar-days')
+                            ->requiresConfirmation()
+                            ->color('success')
+                            ->form([
+                                Forms\Components\DatePicker::make('start_date')
+                                    ->label('Interview Date')
+                                    ->required()
+                                    ->minDate(now()),
+                                
+                                Forms\Components\TimePicker::make('start_time')
+                                    ->label('Start Time (First Batch)')
+                                    ->required()
+                                    ->default('10:00:00'),
 
-            // for interview schedulling 
-                //       Tables\Actions\BulkAction::make('scheduleInterview')
-                //         ->label('Schedule Interview')
-                //             ->form([
-                //                     Forms\Components\Select::make('interview_batch_id')
-                //                         ->relationship('interviewBatch', 'title')
-                //                         ->required(),
-                //                 ])
+                                Forms\Components\TextInput::make('location')
+                                    ->label('Offline Location')
+                                    ->required()
+                                    ->placeholder('e.g., Conf Room A, 2nd Floor, Tech Park'),
+                                
+                                Forms\Components\TextInput::make('batch_size')
+                                    ->label('Candidates per Batch')
+                                    ->numeric()
+                                    ->default(10) // Default is 10 as per your requirement
+                                    ->required(),
 
-                //              ->action(function (Collection $records, array $data) 
-                //                     {
-                //                         foreach ($records as $application)
-                //                         {
-                //                             $application->interviewBatches()
-                //                                 ->attach($data['interview_batch_id']);
+                                Forms\Components\TextInput::make('duration_per_batch')
+                                    ->label('Duration per Batch (Minutes)')
+                                    ->numeric()
+                                    ->default(60) // Each batch takes 1 hour
+                                    ->required(),
+                            ])
+                            ->action(function (Collection $records, array $data) {
+                                    
+                                    // 1. FILTER CANDIDATES 🛡️
+                                    // Remove anyone who is already 'selected' or 'rejected'
+                                    // We only want to schedule people who are 'applied' or 'shortlisted'
+                                    $eligibleRecords = $records->reject(function ($record) {
+                                        return in_array($record->status, ['selected', 'rejected', 'interview_scheduled']);
+                                    });
 
-                //                             $application->update([
-                //                                 'status' => 'interview_scheduled',  ]);
-                //                         }
-                //                     }
-                //                 )
-                                            
+                                    // Stop if no one is left after filtering
+                                    if ($eligibleRecords->isEmpty()) {
+                                        \Filament\Notifications\Notification::make()
+                                            ->title('Operation Cancelled')
+                                            ->body('All selected candidates have already been processed (Selected, Rejected, or Scheduled).')
+                                            ->warning()
+                                            ->send();
+                                        return;
+                                    }
 
+                                    // 2. RANDOMIZE (Optional, based on your previous request)
+                                    $shuffledRecords = $eligibleRecords->shuffle();
 
-                
-                // ]);
+                                    // 3. CHUNK INTO BATCHES
+                                    $chunks = $shuffledRecords->chunk($data['batch_size']);
+                                    
+                                    $currentBatchTime = \Carbon\Carbon::parse($data['start_time']);
+                                    $batchCount = 1;
+
+                                    foreach ($chunks as $chunk) {
+                                        // Create Batch
+                                        $batch = \App\Models\InterviewBatch::create([
+                                            'batch_name'     => "Batch " . $batchCount . " (" . $chunk->count() . " Candidates)",
+                                            'interview_date' => $data['start_date'],
+                                            'interview_time' => $currentBatchTime->format('H:i:s'),
+                                            'location'       => $data['location'],
+                                        ]);
+
+                                        foreach ($chunk as $applicant) {
+                                            $applicant->update([
+                                                'interview_batch_id' => $batch->id,
+                                                'status'             => 'interview_scheduled',
+                                            ]);
+
+                                            // Send Email
+                                            Mail::to($applicant)->send(new InterviewScheduledMail($applicant, $batch));
+                                        }
+
+                                        $currentBatchTime->addMinutes($data['duration_per_batch']);
+                                        $batchCount++;
+                                    }
+
+                                    // Success Notification
+                                    \Filament\Notifications\Notification::make()
+                                        ->title('Scheduled Successfully')
+                                        ->body("Scheduled " . $eligibleRecords->count() . " eligible candidates into " . ($batchCount - 1) . " batches.")
+                                        ->success()
+                                        ->send();
+                                })
+                        // ---------------------------------
+                    ]),
+                ]);
+                               
     }
+            // Forms\Components\Select::make('mode')
+            //     ->options([
+            //         'Online' => 'Online',
+            //         'Offline' => 'Offline',
+            //     ])
+            //     ->reactive()
+            //     ->required(),
+
+            // Forms\Components\TextInput::make('meeting_link')
+            //     ->visible(fn ($get) => $get('mode') === 'Online'),
+
+            // Forms\Components\TextInput::make('location')
+            //     ->visible(fn ($get) => $get('mode') === 'Offline'),
+
+    
 
     public static function getRelations(): array
     {

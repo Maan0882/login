@@ -14,13 +14,16 @@ return new class extends Migration
         Schema::create('applications', function (Blueprint $table) {
             $table->id();
             $table->string('name');
-        $table->string('email')->unique();
-        $table->string('phone');
-        $table->string('college')->nullable();
-        $table->string('degree')->nullable();
-        $table->string('domain')->nullable();
-        $table->string('skills')->nullable();
-        $table->string('resume_path')->nullable();
+            $table->string('email')->unique();
+            $table->string('phone');
+            $table->string('college')->nullable();
+            $table->string('degree')->nullable();
+            $table->string('last_exam_appeared')->nullable(); 
+            $table->decimal('cgpa', 4, 2)->nullable();
+            $table->string('domain')->nullable();
+            $table->string('skills')->nullable();
+            $table->string('resume_path')->nullable();
+            $table->string('status')->default('applied');
             $table->timestamps();
         });
     }
